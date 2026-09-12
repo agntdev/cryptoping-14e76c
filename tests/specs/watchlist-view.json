@@ -1,0 +1,20 @@
+[
+  {
+    "name": "View watchlist",
+    "steps": [
+      {
+        "expect": [
+          {
+            "method": "sendMessage",
+            "payload": {
+              "text": "Show personal watchlist with current prices and 1h change"
+            }
+          }
+        ],
+        "send": {
+          "callback": "watchlist:view"
+        }
+      }
+    ]
+  }
+]
