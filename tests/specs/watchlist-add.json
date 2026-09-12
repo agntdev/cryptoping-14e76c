@@ -1,0 +1,20 @@
+[
+  {
+    "name": "Add ticker",
+    "steps": [
+      {
+        "expect": [
+          {
+            "method": "sendMessage",
+            "payload": {
+              "text": "Begin inline flow to add a ticker from seeded list or enter a custom ticker"
+            }
+          }
+        ],
+        "send": {
+          "callback": "watchlist:add"
+        }
+      }
+    ]
+  }
+]
