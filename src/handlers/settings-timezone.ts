@@ -1,0 +1,10 @@
+import { Composer } from "grammy";
+import type { Ctx } from "../bot.js";
+import { data } from "../crypto.js";
+import { inlineButton, inlineKeyboard, registerMainMenuItem } from "../toolkit/index.js";
+registerMainMenuItem({ label: "Timezone", data: "settings:timezone", order: 60 });
+const composer = new Composer<Ctx>();
+composer.callbackQuery("settings:timezone", async ctx => { await ctx.answerCallbackQuery(); ctx.session.step = "timezone"; await ctx.editMessageText("Send your IANA timezone, for example Europe/London.", { reply_markup: inlineKeyboard([[inlineButton("Use UTC", "timezone:UTC"), inlineButton("Back to menu", "menu:main")]]) }); });
+composer.callbackQuery("timezone:UTC", async ctx => { await ctx.answerCallbackQuery(); data(ctx).profile.timezone = "UTC"; ctx.session.step = undefined; await ctx.editMessageText("Timezone set to UTC."); });
+composer.on("message:text", async (ctx, next) => { if (ctx.session.step !== "timezone") return next(); const zone = ctx.message.text.trim(); try { new Intl.DateTimeFormat("en-US", { timeZone: zone }).format(); } catch { await ctx.reply("That timezone isn't recognised. Try a name such as Europe/London."); return; } data(ctx).profile.timezone = zone; ctx.session.step = undefined; await ctx.reply(`Timezone set to ${zone}.`); });
+export default composer;

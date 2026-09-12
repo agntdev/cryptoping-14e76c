@@ -1,17 +1,10 @@
 import { Composer } from "grammy";
-
-// SCAFFOLD — generated from the bot blueprint BEFORE the agent runs.
-// Keep a LIVE registration (.command / .callbackQuery / …) so this feature is
-// never an empty stub. Replace the reply body with real logic + copy; if you
-// change the user-facing text, update tests/specs to match EXACTLY.
-// Do NOT rewrite src/bot.ts — buildBot() already auto-loads this module.
-// Menu: wire this into /start via registerMainMenuItem({ label: "Set quiet hours", data: "settings:quiet_hours" }) if the toolkit exposes it.
-
-const composer = new Composer();
-
-composer.callbackQuery("settings:quiet_hours", async (ctx) => {
-  await ctx.answerCallbackQuery();
-  await ctx.reply("Inline flow to set local start/end times when non-urgent alerts are suppressed");
-});
-
+import type { Ctx } from "../bot.js";
+import { data, timeValid } from "../crypto.js";
+import { inlineButton, inlineKeyboard, registerMainMenuItem } from "../toolkit/index.js";
+registerMainMenuItem({ label: "Quiet hours", data: "settings:quiet_hours", order: 40 });
+const composer = new Composer<Ctx>();
+composer.callbackQuery("settings:quiet_hours", async ctx => { await ctx.answerCallbackQuery(); ctx.session.step = "quiet_start"; await ctx.editMessageText("Send the local quiet-hours start time in HH:MM.", { reply_markup: inlineKeyboard([[inlineButton("Back to menu", "menu:main")]]) }); });
+composer.on("message:text", async (ctx, next) => { if (ctx.session.step !== "quiet_start") return next(); if (!timeValid(ctx.message.text.trim())) { await ctx.reply("Use a 24-hour time such as 22:30."); return; } ctx.session.flow = { quietStart: ctx.message.text.trim() }; ctx.session.step = "quiet_end"; await ctx.reply("Now send the local end time in HH:MM.", { reply_markup: { force_reply: true, input_field_placeholder: "07:00" } }); });
+composer.on("message:text", async (ctx, next) => { if (ctx.session.step !== "quiet_end") return next(); const end = ctx.message.text.trim(); if (!timeValid(end)) { await ctx.reply("Use a 24-hour time such as 07:00."); return; } const d = data(ctx); d.profile.quietStart = ctx.session.flow?.quietStart; d.profile.quietEnd = end; ctx.session.step = undefined; ctx.session.flow = undefined; await ctx.reply(`Quiet hours are set from ${d.profile.quietStart} to ${end} (${d.profile.timezone}). Alerts will wait until you're available.`); });
 export default composer;
