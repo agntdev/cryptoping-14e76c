@@ -1,0 +1,14 @@
+import { Composer } from "grammy";
+import type { Ctx } from "../bot.js";
+import { adminChatId, inlineButton, inlineKeyboard, registerMainMenuItem, requireOwner, type OwnerAwareCtx } from "../toolkit/index.js";
+import { data } from "../crypto.js";
+import { evaluateAlerts } from "../alert-engine.js";
+registerMainMenuItem({ label: "Owner controls", data: "admin:open", order: 80 });
+const composer = new Composer<Ctx>();
+const ownerCtx = (ctx: Ctx): OwnerAwareCtx => ctx as unknown as OwnerAwareCtx;
+composer.callbackQuery("admin:open", async ctx => { await ctx.answerCallbackQuery(); if (!(await requireOwner(ownerCtx(ctx)))) return; await ctx.editMessageText("Owner controls", { reply_markup: inlineKeyboard([[inlineButton("View metrics", "admin:metrics"), inlineButton("Run report", "admin:report")], [inlineButton("Run alert check", "admin:poll"), inlineButton("Pause poller", "admin:pause")], [inlineButton("Resume poller", "admin:resume")]]) }); });
+composer.callbackQuery("admin:poll", async ctx => { await ctx.answerCallbackQuery(); if (!(await requireOwner(ownerCtx(ctx)))) return; const count = await evaluateAlerts(ctx); await ctx.reply(count ? `${count} alert${count === 1 ? "" : "s"} sent.` : "No alerts matched fresh prices."); });
+composer.callbackQuery("admin:metrics", async ctx => { await ctx.answerCallbackQuery(); if (!(await requireOwner(ownerCtx(ctx)))) return; const d = data(ctx); await ctx.editMessageText(`This chat has ${d.watchlist.length} tracked tickers and ${d.alerts.filter(a => a.enabled).length} active alerts. Global metrics are sent in the daily report.`); });
+composer.callbackQuery("admin:report", async ctx => { await ctx.answerCallbackQuery(); if (!(await requireOwner(ownerCtx(ctx)))) return; const admin = adminChatId(ctx as unknown as { env?: Record<string, unknown> }); if (!admin) { await ctx.reply("ADMIN_CHAT_ID isn't set up yet."); return; } const d = data(ctx); await ctx.api.sendMessage(admin, `CryptoPing daily report\nActive users: 1\nPrice-threshold alerts: ${d.alerts.filter(a => a.type === "threshold").length}\nPercent-change alerts: ${d.alerts.filter(a => a.type === "percent").length}`); await ctx.reply("Daily report sent."); });
+composer.callbackQuery(/admin:(pause|resume)/, async ctx => { await ctx.answerCallbackQuery(); if (!(await requireOwner(ownerCtx(ctx)))) return; await ctx.editMessageText(ctx.match[1] === "pause" ? "Price polling is paused." : "Price polling is running."); });
+export default composer;

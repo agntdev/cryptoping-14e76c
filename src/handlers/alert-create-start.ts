@@ -1,17 +1,23 @@
 import { Composer } from "grammy";
-
-// SCAFFOLD — generated from the bot blueprint BEFORE the agent runs.
-// Keep a LIVE registration (.command / .callbackQuery / …) so this feature is
-// never an empty stub. Replace the reply body with real logic + copy; if you
-// change the user-facing text, update tests/specs to match EXACTLY.
-// Do NOT rewrite src/bot.ts — buildBot() already auto-loads this module.
-// Menu: wire this into /start via registerMainMenuItem({ label: "Add alert", data: "alert:create:start" }) if the toolkit exposes it.
-
-const composer = new Composer();
-
-composer.callbackQuery("alert:create:start", async (ctx) => {
-  await ctx.answerCallbackQuery();
-  await ctx.reply("Choose price-threshold or percent-change alert via inline keyboard");
-});
-
+import type { Ctx } from "../bot.js";
+import { addTicker, COINS, data, now, symbol } from "../crypto.js";
+import { inlineButton, inlineKeyboard, registerMainMenuItem } from "../toolkit/index.js";
+registerMainMenuItem({ label: "Add alert", data: "alert:create:start", order: 30 });
+const composer = new Composer<Ctx>();
+const kb = (rows: ReturnType<typeof inlineButton>[][]) => inlineKeyboard([...rows, [inlineButton("Cancel", "alert:cancel")]]);
+function tickerKeyboard(ctx: Ctx) { const tickers = data(ctx).watchlist.map(w => w.ticker); return kb([...(tickers.length ? [tickers.map(t => inlineButton(t, `alert:ticker:${t}`))] : []), [inlineButton("BTC", "alert:ticker:BTC"), inlineButton("ETH", "alert:ticker:ETH"), inlineButton("TON", "alert:ticker:TON")], [inlineButton("Custom ticker", "alert:custom")]]); }
+function clear(ctx: Ctx) { ctx.session.step = undefined; ctx.session.flow = undefined; }
+composer.callbackQuery("alert:create:start", async ctx => { await ctx.answerCallbackQuery(); clear(ctx); await ctx.editMessageText("Choose the alert type.", { reply_markup: kb([[inlineButton("Price threshold", "alert:type:threshold")], [inlineButton("Percent change", "alert:type:percent")]]) }); });
+composer.callbackQuery(/^alert:type:(threshold|percent)$/, async ctx => { await ctx.answerCallbackQuery(); ctx.session.flow = { type: ctx.match[1] as "threshold" | "percent" }; await ctx.editMessageText("Choose the ticker for this alert.", { reply_markup: tickerKeyboard(ctx) }); });
+composer.callbackQuery(/^alert:ticker:(BTC|ETH|TON)$/, async ctx => { await ctx.answerCallbackQuery(); if (!ctx.session.flow?.type) { await ctx.editMessageText("Start by choosing an alert type."); return; } const ticker = ctx.match[1]; addTicker(ctx, ticker); ctx.session.flow.ticker = ticker; const percent = ctx.session.flow.type === "percent"; await ctx.editMessageText(percent ? "Choose whether the price should move up or down." : "Choose the price direction.", { reply_markup: kb([percent ? [inlineButton("Up", "alert:dir:up"), inlineButton("Down", "alert:dir:down")] : [inlineButton("Above", "alert:dir:above"), inlineButton("Below", "alert:dir:below")]]) }); });
+composer.callbackQuery("alert:custom", async ctx => { await ctx.answerCallbackQuery(); ctx.session.step = "ticker"; await ctx.reply("Send a supported ticker symbol, for example BTC.", { reply_markup: { force_reply: true, input_field_placeholder: "Ticker symbol" } }); });
+composer.callbackQuery(/^alert:dir:(above|below|up|down)$/, async ctx => { await ctx.answerCallbackQuery(); if (!ctx.session.flow) return; ctx.session.flow.direction = ctx.match[1]; ctx.session.step = "alert_value"; await ctx.reply(ctx.session.flow.type === "percent" ? "Send the percent move, for example 5." : "Send the target price in USD, for example 65000.", { reply_markup: { force_reply: true, input_field_placeholder: "Number" } }); });
+composer.on("message:text", async (ctx, next) => { if (ctx.session.step !== "alert_value") return next(); const value = Number(ctx.message.text.trim().replace("%", "")); if (!Number.isFinite(value) || value <= 0) { await ctx.reply("Enter a positive number to continue."); return; } if (!ctx.session.flow) return; ctx.session.flow.value = value; if (ctx.session.flow.type === "percent") { await ctx.reply("Choose the comparison window.", { reply_markup: kb([[inlineButton("1 hour", "alert:window:60"), inlineButton("4 hours", "alert:window:240"), inlineButton("24 hours", "alert:window:1440")]]) }); } else await confirm(ctx); });
+composer.callbackQuery(/^alert:window:(60|240|1440)$/, async ctx => { await ctx.answerCallbackQuery(); if (!ctx.session.flow) return; ctx.session.flow.window = Number(ctx.match[1]); await confirm(ctx); });
+async function confirm(ctx: Ctx) { const f = ctx.session.flow!; ctx.session.step = undefined; const rule = f.type === "percent" ? `${f.direction} ${f.value}% in ${f.window ?? 60} minutes` : `${f.direction} $${f.value}`; await ctx.reply(`${f.ticker} alert: ${rule}. Cooldown: ${data(ctx).profile.cooldownHours} hours.`, { reply_markup: kb([[inlineButton("Confirm", "alert:confirm"), inlineButton("Change", "alert:create:start")]]) }); }
+composer.callbackQuery("alert:confirm", async ctx => { await ctx.answerCallbackQuery(); const f = ctx.session.flow; if (!f?.type || !f.ticker || !f.direction || !f.value) { await ctx.reply("That alert has expired. Start again from Add alert."); return; } const d = data(ctx); d.alerts.push({ id: `${f.ticker}-${now()}`, ticker: f.ticker, type: f.type, direction: f.direction, value: f.value, window: f.window ?? 60, cooldown: d.profile.cooldownHours, enabled: true, createdAt: now() }); clear(ctx); await ctx.editMessageText(`${f.ticker} alert is active.`, { reply_markup: inlineKeyboard([[inlineButton("View watchlist", "watchlist:view"), inlineButton("Add alert", "alert:create:start")]]) }); });
+composer.callbackQuery("alert:cancel", async ctx => { await ctx.answerCallbackQuery(); clear(ctx); await ctx.editMessageText("Alert setup cancelled.", { reply_markup: inlineKeyboard([[inlineButton("Back to menu", "menu:main")]]) }); });
+composer.callbackQuery(/^alert:snooze:(.+)$/, async ctx => { await ctx.answerCallbackQuery(); const rule = data(ctx).alerts.find(a => a.id === ctx.match[1]); if (!rule) { await ctx.reply("That alert is no longer available."); return; } rule.lastFiredAt = now(); await ctx.reply(`${rule.ticker} alerts are snoozed for ${rule.cooldown} hours.`); });
+// Allows a custom ticker when a user deliberately types it after this flow starts.
+composer.on("message:text", async (ctx, next) => { if (ctx.session.step !== "ticker" || !ctx.session.flow?.type) return next(); const ticker = symbol(ctx.message.text); if (!COINS[ticker]) { await ctx.reply("I couldn't find that ticker. Try BTC, ETH, or TON."); return; } addTicker(ctx, ticker); ctx.session.flow.ticker = ticker; ctx.session.step = undefined; await ctx.reply("Choose the direction.", { reply_markup: kb([[inlineButton("Above", "alert:dir:above"), inlineButton("Below", "alert:dir:below")]]) }); });
 export default composer;
